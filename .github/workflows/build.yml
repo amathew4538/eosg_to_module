@@ -66,15 +66,6 @@ jobs:
             platform: ios
             arch: arm64
             arch_label: arm64
-            ios_simulator: "no"
-            runner: macos-15
-            godot_cpp_ref: "4.2"
-            threads: "yes"
-          - id: ios-arm64-simulator
-            platform: ios
-            arch: arm64
-            arch_label: arm64-simulator
-            ios_simulator: "yes"
             runner: macos-15
             godot_cpp_ref: "4.2"
             threads: "yes"
@@ -198,15 +189,14 @@ jobs:
         env:
           SCONS_CACHE: ${{ github.workspace }}/.scons-cache/
           SCONS_CACHE_LIMIT: 7168
+          EOSG_STATIC_LIBRARY: "yes"
         run: |
           scons \
             target=template_release \
             platform='${{ matrix.platform }}' \
             arch='${{ matrix.arch }}' \
             threads='${{ matrix.threads }}' \
-            dev_build=no \
-            static_library=yes \
-            ${{ matrix.platform == 'ios' && format('ios_simulator={0}', matrix.ios_simulator) || '' }}
+            dev_build=no
 
       - name: Collect module and SDK files
         working-directory: epic-online-services-godot
@@ -249,12 +239,6 @@ jobs:
               and f".{platform}.template_release." in path.name
               and f".{arch}" in path.name
           ]
-          if platform == "ios":
-              simulator = arch_label.endswith("-simulator")
-              godot_cpp_files = [
-                  path for path in godot_cpp_files
-                  if (".simulator." in path.name) == simulator
-              ]
           if not godot_cpp_files:
               raise SystemExit(f"No matching godot-cpp static library was produced for {platform}/{arch_label}.")
           for source in godot_cpp_files:
@@ -269,22 +253,7 @@ jobs:
               ios_sdk = sdk_root / "Bin/IOS/EOSSDK.xcframework"
               if not ios_sdk.is_dir():
                   raise SystemExit(f"EOSSDK.xcframework is missing for {platform}/{arch_label}.")
-              import plistlib
-              with (ios_sdk / "Info.plist").open("rb") as info_file:
-                  libraries = plistlib.load(info_file)["AvailableLibraries"]
-              has_simulator_slice = any(
-                  "ios-simulator" in library.get("SupportedPlatformVariant", "")
-                  for library in libraries
-              )
-              if arch_label.endswith("-simulator") and not has_simulator_slice:
-                  sdk_destination.mkdir(parents=True, exist_ok=True)
-                  (sdk_destination / "README.txt").write_text(
-                      "The EOS SDK release contains only an iOS device slice; it has no simulator binary. "
-                      "This target's EOSG and godot-cpp archives build, but EOS-linked simulator modules "
-                      "require an EOS XCFramework with an iOS Simulator slice.\n"
-                  )
-              else:
-                  shutil.copytree(ios_sdk, sdk_destination / "EOSSDK.xcframework", dirs_exist_ok=True)
+              shutil.copytree(ios_sdk, sdk_destination / "EOSSDK.xcframework", dirs_exist_ok=True)
           elif platform == "android":
               android_sdk = sdk_root / "Bin/Android/static-stdc++"
               if not android_sdk.is_dir():
