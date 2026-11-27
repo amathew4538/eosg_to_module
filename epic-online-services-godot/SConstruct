@@ -1,0 +1,206 @@
+#!/usr/bin/env python
+import json
+import os
+import re
+import shutil
+
+env = SConscript("godot-cpp/SConstruct")
+
+# Expose the godot-cpp API version to the C++ sources, so they can stay
+# compatible with both godot-cpp 4.2 (all platforms) and >= 4.4 (Android,
+# where 16 KB page support requires a newer godot-cpp - see issue #70).
+with open("godot-cpp/gdextension/extension_api.json") as _api_file:
+	_api_header = json.load(_api_file)["header"]
+env.Append(CPPDEFINES=[
+	("GODOT_CPP_VERSION_MAJOR", _api_header["version_major"]),
+	("GODOT_CPP_VERSION_MINOR", _api_header["version_minor"]),
+])
+lib_name = "libeosg"
+plugin_bin_folder = "sample/addons/epic-online-services-godot/bin"
+
+eos_sdk_folder = "thirdparty/eos-sdk/SDK/"
+
+
+# Add source files
+env.Append(CPPPATH=["src/", eos_sdk_folder + "Include/"])
+sources = Glob("src/*.cpp")
+platform = env["platform"]
+build_target = env["target"]
+
+
+def copy_file(from_path, to_path):
+	if not os.path.exists(os.path.dirname(to_path)):
+		os.makedirs(os.path.dirname(to_path))
+	shutil.copyfile(from_path, to_path)
+
+def copy_folder(from_path, to_path):
+	if not os.path.exists(to_path):
+		os.makedirs(to_path)
+	shutil.rmtree(to_path, ignore_errors=True)
+	shutil.copytree(from_path, to_path)
+
+def extract_eos_android_libraries():
+	libs_path = eos_sdk_folder + "Bin/Android/static-stdc++/libs/"
+	aar_file = eos_sdk_folder + "Bin/Android/static-stdc++/aar/eossdk-StaticSTDC-release.aar"
+	zip_file = libs_path + "eos-sdk.zip"
+	
+	# Delete libs folder if exists
+	shutil.rmtree(libs_path, ignore_errors=True)
+	
+	# Copy aar to zip file
+	copy_file(aar_file, zip_file)
+	
+	# Copy aar to plugin bin/android
+	copy_file(aar_file, plugin_bin_folder + "/android/eossdk-StaticSTDC-release.aar")
+	
+	# Create folder if doesnt exist
+	if not os.path.exists(libs_path + "extracted"):
+		os.makedirs(libs_path + "extracted")
+
+	# Unzip the file
+	shutil.unpack_archive(zip_file, libs_path + "extracted")
+
+	# Copy all folders from libs_path+"extracted/jni" to libs_path
+	for folder in os.listdir(libs_path + "extracted/jni"):
+		shutil.copytree(libs_path + "extracted/jni/" + folder, libs_path + folder)
+	
+	# Delete extracted folder
+	shutil.rmtree(libs_path + "extracted", ignore_errors=True)
+	
+	# Delete zip file
+	os.remove(zip_file)
+
+
+genv = env
+def on_complete(target, source, env):
+	if platform == "windows":
+		shutil.rmtree(plugin_bin_folder + "/windows/x64", ignore_errors=True)
+		shutil.copytree(eos_sdk_folder + "Bin/x64", plugin_bin_folder + "/windows/x64")
+		copy_file(eos_sdk_folder + "Bin/EOSSDK-Win64-Shipping.dll", plugin_bin_folder + "/windows/EOSSDK-Win64-Shipping.dll")
+	
+	elif platform == "linux":
+		so_variant = "LinuxArm64" if genv["arch"] == "arm64" else "Linux"
+		copy_file(eos_sdk_folder + f"Bin/libEOSSDK-{so_variant}-Shipping.so", plugin_bin_folder + f"/linux/libEOSSDK-{so_variant}-Shipping.so")
+	
+	elif platform == "macos":
+		framework_folder = plugin_bin_folder + f"/macos/{lib_name}.{platform}.{build_target}.framework"
+		# Copies EOS dylib inside framework folder
+		copy_file(eos_sdk_folder + "Bin/libEOSSDK-Mac-Shipping.dylib", framework_folder + f"/libEOSSDK-Mac-Shipping.dylib")
+		lib_path = f"{framework_folder}/{lib_name}.{platform}.{build_target}"
+		print(f"Updating libEOSSDK-Mac-Shipping.dylib path in {lib_path}")
+		os.system(f"install_name_tool -change @rpath/libEOSSDK-Mac-Shipping.dylib @loader_path/libEOSSDK-Mac-Shipping.dylib {lib_path}")
+
+
+
+# For reference:
+# - CCFLAGS are compilation flags shared between C and C++
+# - CFLAGS are for C-specific compilation flags
+# - CXXFLAGS are for C++-specific compilation flags
+# - CPPFLAGS are for pre-processor flags
+# - CPPDEFINES are for pre-processor defines
+# - LINKFLAGS are for linking flags
+
+
+env.Append(LIBPATH=[eos_sdk_folder + "Lib/"])
+env.Append(LIBPATH=[eos_sdk_folder + "Bin/"])
+if env["platform"] == "windows":
+	# TODO: dont ignore this warning
+	# this disables LINK : error LNK1218: warning treated as error;
+	# so that it can build in github action with scons cache
+	env.Append(LINKFLAGS=["/ignore:4099"])
+	
+	env.Append(LIBS=["EOSSDK-Win64-Shipping"])
+
+elif env["platform"] == "linux":
+	env.Append(LINKFLAGS=["-static-libgcc", "-static-libstdc++"])
+	if env["arch"] == "arm64":
+		env.Append(LIBS=["EOSSDK-LinuxArm64-Shipping"])
+	else:
+		env.Append(LIBS=["EOSSDK-Linux-Shipping"])
+
+elif env["platform"] == "macos":
+	env.Append(LIBS=["EOSSDK-Mac-Shipping"])
+
+elif env["platform"] == "ios":
+	if env["arch"] != "arm64":
+		raise Exception("Only arm64 is supported on iOS.")
+	copy_folder(eos_sdk_folder + "Bin/IOS/EOSSDK.xcframework", plugin_bin_folder + "/ios/EOSSDK.xcframework")
+	
+	env.Append(ENV={'IPHONEOS_DEPLOYMENT_TARGET': '15.0'})
+
+	env.Append(LINKFLAGS=[
+		"-F", plugin_bin_folder + f"/ios/EOSSDK.xcframework/ios-arm64{"-simulator" if env["ios_simulator"] else ""}",
+		'-framework', 'AuthenticationServices',
+		'-framework', 'EOSSDK',
+	])
+	
+
+elif env["platform"] == "android":
+	eos_android_arch = "arm64-v8a"
+	if env["arch"] == "x86_64":
+		eos_android_arch = "x86_64"
+		
+	extract_eos_android_libraries()
+	
+	env.Append(LIBPATH=[eos_sdk_folder + "Bin/Android/static-stdc++/libs/" + eos_android_arch + "/"]) 
+	env.Append(LIBS=["EOSSDK"])
+	# Google Play requires 16 KB page-size support (default since NDK r28; explicit for safety)
+	env.Append(LINKFLAGS=["-Wl,-z,max-page-size=16384", "-Wl,-z,common-page-size=16384"])
+
+
+if env["platform"] == "windows":
+	# Embed a version resource (ProductName/ProductVersion) in the DLL. SignPath
+	# enforces this metadata when code signing (see .github/signpath/).
+	with open("sample/addons/epic-online-services-godot/plugin.cfg") as _plugin_cfg:
+		_version_match = re.search(r'^version\s*=\s*"([^"]+)"', _plugin_cfg.read(), re.MULTILINE)
+	if not _version_match:
+		raise Exception("Could not read version from plugin.cfg")
+	plugin_version = _version_match.group(1)
+	_version_numbers = [int(part) for part in re.findall(r"\d+", plugin_version.split("-")[0])][:4]
+	_version_numbers += [0] * (4 - len(_version_numbers))
+	_dll_name = f"{lib_name}{env['suffix']}{env['SHLIBSUFFIX']}"
+	version_rc_subst = {
+		"@VERSION@": plugin_version,
+		"@VERSION_COMMA@": ",".join(str(number) for number in _version_numbers),
+		"@FILEFLAGS@": "VS_FF_DEBUG" if env["target"] == "template_debug" else "0x0L",
+		"@INTERNAL_NAME@": lib_name,
+		"@ORIGINAL_FILENAME@": _dll_name,
+	}
+
+	def generate_version_rc(target, source, env):
+		with open(str(source[0])) as template_file:
+			content = template_file.read()
+		for placeholder, value in version_rc_subst.items():
+			content = content.replace(placeholder, value)
+		with open(str(target[0]), "w") as rc_file:
+			rc_file.write(content)
+
+	version_rc = env.Command(
+		f"src/windows/eosg_version.{env['suffix'].lstrip('.')}.gen.rc",
+		["src/windows/eosg_version.rc.in", env.Value(version_rc_subst)],
+		generate_version_rc,
+	)
+	res_env = env.Clone(CPPDEFINES=[])
+	if res_env.get("use_mingw") and os.name != "nt":
+		_mingw_prefix = "i686" if env["arch"] == "x86_32" else env["arch"]
+		res_env["RC"] = f"{_mingw_prefix}-w64-mingw32-windres"
+	sources.append(res_env.RES(version_rc))
+
+
+if env["platform"] == "macos":
+	library = env.SharedLibrary(
+		f"{plugin_bin_folder}/macos/{lib_name}.{platform}.{build_target}.framework/{lib_name}.{platform}.{build_target}",
+		source=sources,)
+else:
+	library = env.SharedLibrary(
+		f"{plugin_bin_folder}/{platform}/{lib_name}{env['suffix']}{env['SHLIBSUFFIX']}",
+		source=sources,
+	)
+
+
+# Disable scons cache for source files
+# NoCache(sources)
+
+complete_command = Command('complete', library, on_complete)
+Depends(complete_command, library)
+Default(complete_command)

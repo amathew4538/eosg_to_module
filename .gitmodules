@@ -1,0 +1,3 @@
+[submodule "epic-online-services-godot"]
+	path = epic-online-services-godot
+	url = https://github.com/3ddelano/epic-online-services-godot.git
