@@ -199,12 +199,12 @@ if env["platform"] == "windows" and not static_library:
 
 if static_library and (platform == "macos" or platform == "ios"):
 	library = env.StaticLibrary(
-		f"{plugin_bin_folder}/{platform}/{lib_name}{env['suffix']}.framework/{lib_name}{env['suffix']}",
+		f"{plugin_bin_folder}/{platform}/{lib_name}{env['suffix']}.framework/{lib_name}{env['suffix']}{env['LIBSUFFIX']}",
 		source=sources,
 	)
 elif static_library:
 	library = env.StaticLibrary(
-		f"{plugin_bin_folder}/{platform}/{lib_name}{env['suffix']}",
+		f"{plugin_bin_folder}/{platform}/{lib_name}{env['suffix']}{env['LIBSUFFIX']}",
 		source=sources,
 	)
 elif env["platform"] == "macos":
