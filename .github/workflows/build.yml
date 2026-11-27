@@ -189,7 +189,6 @@ jobs:
         env:
           SCONS_CACHE: ${{ github.workspace }}/.scons-cache/
           SCONS_CACHE_LIMIT: 7168
-          EOSG_STATIC_LIBRARY: "yes"
         run: |
           scons \
             target=template_release \
