@@ -117,7 +117,10 @@ if env["platform"] == "windows" and not static_library:
 	# so that it can build in github action with scons cache
 	env.Append(LINKFLAGS=["/ignore:4099"])
 	
-	env.Append(LIBS=["EOSSDK-Win64-Shipping"])
+	if env["arch"] == "arm64":
+		env.Append(LIBS=["EOSSDK-Win64-Shippingarm64"])
+	else:
+		env.Append(LIBS=["EOSSDK-Win64-Shipping"])
 
 elif env["platform"] == "linux":
 	env.Append(LINKFLAGS=["-static-libgcc", "-static-libstdc++"])

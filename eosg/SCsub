@@ -51,7 +51,8 @@ env.Append(CPPPATH=[sdk_path + "/Include"])
 if platform in ["windows", "linux", "macos"]:
     env.Append(LIBPATH=[sdk_path + "/lib"])
     if platform == "windows":
-        env.Append(LIBS=["EOSSDK-Win64-Shipping"])
+        sdk_library = "EOSSDK-Win64-Shippingarm64" if env["arch"] == "arm64" else "EOSSDK-Win64-Shipping"
+        env.Append(LIBS=[sdk_library])
     elif platform == "linux":
         env.Append(LIBS=["EOSSDK-LinuxArm64-Shipping" if env["arch"] == "arm64" else "EOSSDK-Linux-Shipping"])
     else:
