@@ -25,62 +25,63 @@ jobs:
             arch: x86_64
             arch_label: x86_64
             runner: windows-latest
+            godot_cpp_ref: "4.2"
             threads: "yes"
           - id: windows-arm64
             platform: windows
             arch: arm64
             arch_label: arm64
             runner: windows-latest
+            godot_cpp_ref: "4.2"
             threads: "yes"
           - id: linux-x86_64
             platform: linux
             arch: x86_64
             arch_label: x86_64
             runner: ubuntu-24.04
+            godot_cpp_ref: "4.2"
             threads: "yes"
           - id: linux-arm64
             platform: linux
             arch: arm64
             arch_label: arm64
             runner: ubuntu-24.04-arm
+            godot_cpp_ref: "4.2"
             threads: "yes"
           - id: macos-arm64
             platform: macos
             arch: arm64
             arch_label: arm64
-            runner: macos-14
+            runner: macos-15
+            godot_cpp_ref: "4.2"
             threads: "yes"
           - id: macos-x86_64
             platform: macos
             arch: x86_64
             arch_label: x86_64
-            runner: macos-14
+            runner: macos-15-intel
+            godot_cpp_ref: "4.2"
             threads: "yes"
           - id: ios-arm64
             platform: ios
             arch: arm64
             arch_label: arm64
-            ios_simulator: "no"
-            runner: macos-14
-            threads: "yes"
-          - id: ios-arm64-simulator
-            platform: ios
-            arch: arm64
-            arch_label: arm64-simulator
-            ios_simulator: "yes"
-            runner: macos-14
+            runner: macos-15
+            godot_cpp_ref: "4.2"
             threads: "yes"
           - id: android-arm64
             platform: android
             arch: arm64
             arch_label: arm64
             runner: ubuntu-24.04
+            godot_cpp_ref: "godot-4.5-stable"
             threads: "yes"
           - id: android-x86_64
             platform: android
             arch: x86_64
             arch_label: x86_64
             runner: ubuntu-24.04
+            godot_cpp_ref: "godot-4.5-stable"
             threads: "yes"
     steps:
       - name: Check out repository
@@ -98,7 +99,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: godotengine/godot-cpp
-          ref: ${{ matrix.platform == 'android' && 'godot-4.5-stable' || 'godot-4.2-stable' }}
+          ref: ${{ matrix.godot_cpp_ref }}
           path: epic-online-services-godot/godot-cpp
           submodules: recursive
 
@@ -111,7 +112,12 @@ jobs:
           SDK_EXTRACTED_DIR: ${{ runner.temp }}/eos-sdk-extracted
         run: |
           mkdir -p "$SDK_DOWNLOAD_DIR" "$SDK_EXTRACTED_DIR"
-          gh release download --repo amathew4538/eos-sdk-mirror --dir "$SDK_DOWNLOAD_DIR"
+          gh release download SDK \
+            --repo amathew4538/eos-sdk-mirror \
+            --pattern eos-sdk.zip \
+            --pattern eos-sdk-android.zip \
+            --pattern eos-sdk-ios.zip \
+            --dir "$SDK_DOWNLOAD_DIR"
           python - <<'PY'
           import os
           import shutil
@@ -126,7 +132,7 @@ jobs:
           if not archives:
               raise SystemExit("The latest EOS SDK release has no downloadable assets.")
 
-          candidates = []
+          sdk_roots = []
           for archive in archives:
               target = extracted / archive.stem
               target.mkdir(parents=True, exist_ok=True)
@@ -138,18 +144,30 @@ jobs:
                       source.extractall(target)
               else:
                   continue
-              candidates.extend(
-                  folder.parent for folder in target.rglob("Include")
-                  if folder.is_dir() and (folder.parent / "Lib").is_dir()
+              sdk_roots.extend(
+                  folder for folder in target.rglob("SDK")
+                  if "__MACOSX" not in folder.parts
+                  and folder.is_dir()
+                  and (folder / "Bin").is_dir()
               )
 
-          if not candidates:
-              raise SystemExit("No extracted EOS SDK folder containing Include/ and Lib/ was found.")
+          if not sdk_roots:
+              raise SystemExit("No extracted EOS SDK folder containing Bin/ was found.")
           shutil.rmtree(destination, ignore_errors=True)
           destination.mkdir(parents=True)
-          for candidate in candidates:
-              shutil.copytree(candidate, destination, dirs_exist_ok=True)
-          print(f"Installed EOS SDK from {len(candidates)} release asset(s)")
+          for sdk_root in sdk_roots:
+              shutil.copytree(sdk_root, destination, dirs_exist_ok=True)
+
+          required_paths = (
+              destination / "Include",
+              destination / "Lib",
+              destination / "Bin/Android/static-stdc++/aar/eossdk-StaticSTDC-release.aar",
+              destination / "Bin/IOS/EOSSDK.xcframework/Info.plist",
+          )
+          missing = [str(path) for path in required_paths if not path.exists()]
+          if missing:
+              raise SystemExit("Downloaded SDK assets are missing required paths: " + ", ".join(missing))
+          print(f"Installed SDK content from {len(sdk_roots)} release archive(s)")
           PY
 
       - name: Set up MSVC
@@ -177,9 +195,7 @@ jobs:
             platform='${{ matrix.platform }}' \
             arch='${{ matrix.arch }}' \
             threads='${{ matrix.threads }}' \
-            dev_build=no \
-            static_library=yes \
-            ${{ matrix.platform == 'ios' && format('ios_simulator={0}', matrix.ios_simulator) || '' }}
+            dev_build=no
 
       - name: Collect module and SDK files
         working-directory: epic-online-services-godot
@@ -222,12 +238,6 @@ jobs:
               and f".{platform}.template_release." in path.name
               and f".{arch}" in path.name
           ]
-          if platform == "ios":
-              simulator = arch_label.endswith("-simulator")
-              godot_cpp_files = [
-                  path for path in godot_cpp_files
-                  if (".simulator." in path.name) == simulator
-              ]
           if not godot_cpp_files:
               raise SystemExit(f"No matching godot-cpp static library was produced for {platform}/{arch_label}.")
           for source in godot_cpp_files:
