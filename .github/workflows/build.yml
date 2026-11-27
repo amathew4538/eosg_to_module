@@ -1,4 +1,5 @@
-name: 🛠️ Builds
+name: Build static EOSG module
+
 on:
   workflow_dispatch:
   push:
@@ -7,451 +8,332 @@ on:
     tags:
       - "*"
   pull_request:
-env:
-  SIGNPATH_ENABLED: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
-  SIGNPATH_ORGANIZATION_ID: ed9e5103-3fa3-4be4-8ef3-515a5ddb03f0
-  SIGNPATH_PROJECT_SLUG: epic-online-services-godot
-  SIGNPATH_ARTIFACT_CONFIGURATION_SLUG: windows-gdextension-dll
-  # Tag builds use the production certificate once the SIGNPATH_RELEASE_SIGNING_ENABLED
-  # repo variable is "true". Release signing needs manual approval in SignPath, so those
-  # builds wait up to an hour. Everything else uses the self-signed test certificate.
-  SIGNPATH_SIGNING_POLICY_SLUG: ${{ (startsWith(github.ref, 'refs/tags/') && vars.SIGNPATH_RELEASE_SIGNING_ENABLED == 'true') && 'release-signing' || 'test-signing' }}
-  SIGNPATH_WAIT_TIMEOUT_SECONDS: ${{ (startsWith(github.ref, 'refs/tags/') && vars.SIGNPATH_RELEASE_SIGNING_ENABLED == 'true') && '3600' || '600' }}
+
+permissions:
+  contents: read
+
 jobs:
   build:
+    name: ${{ matrix.platform }} / ${{ matrix.arch_label }}
     runs-on: ${{ matrix.runner }}
-    name: ${{ matrix.name }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - identifier: linux-x86-64-debug
-            name: 🐧 Linux x86_64 Debug
-            runner: ubuntu-24.04
-            target: template_debug
-            dev_build: yes
-            platform: linux
-            arch: x86_64
-          - identifier: linux-x86-64-release
-            name: 🐧Linux x86_64 Release
-            runner: ubuntu-24.04
-            target: template_release
-            dev_build: no
-            platform: linux
-            arch: x86_64
-          - identifier: linux-arm64-debug
-            name: 🐧 Linux arm64 Debug
-            runner: ubuntu-24.04-arm
-            target: template_debug
-            dev_build: yes
-            platform: linux
-            arch: arm64
-          - identifier: linux-arm64-release
-            name: 🐧Linux arm64 Release
-            runner: ubuntu-24.04-arm
-            target: template_release
-            dev_build: no
-            platform: linux
-            arch: arm64
-          - identifier: macos-debug
-            name: 🍎 macOS (universal) Debug
-            runner: macos-latest
-            target: template_debug
-            dev_build: yes
-            platform: macos
-            arch: universal
-          - identifier: macos-release
-            name: 🍎 macOS (universal) Release
-            runner: macos-latest
-            target: template_release
-            dev_build: no
-            platform: macos
-            arch: universal
-          - identifier: windows-debug
-            name: 🏁 Windows Debug
-            runner: windows-latest
-            target: template_debug
-            dev_build: yes
+          - id: windows-x86_64
             platform: windows
             arch: x86_64
-          - identifier: windows-release
-            name: 🏁 Windows Release
+            arch_label: x86_64
             runner: windows-latest
-            target: template_release
-            dev_build: no
+            threads: "yes"
+          - id: windows-arm64
             platform: windows
-            arch: x86_64
-          - identifier: android-arm64-debug
-            name: 🤖 Android arm64 Debug
-            runner: ubuntu-24.04
-            target: template_debug
-            dev_build: yes
-            platform: android
             arch: arm64
-            godot_cpp_ref: "godot-4.5-stable"
-          - identifier: android-arm64-release
-            name: 🤖 Android arm64 Release
+            arch_label: arm64
+            runner: windows-latest
+            threads: "yes"
+          - id: linux-x86_64
+            platform: linux
+            arch: x86_64
+            arch_label: x86_64
             runner: ubuntu-24.04
-            target: template_release
-            dev_build: no
-            platform: android
+            threads: "yes"
+          - id: linux-arm64
+            platform: linux
             arch: arm64
-            godot_cpp_ref: "godot-4.5-stable"
-          - identifier: android-x86_64-debug
-            name: 🤖 Android x86_64 Debug
-            runner: ubuntu-24.04
-            target: template_debug
-            dev_build: yes
-            platform: android
+            arch_label: arm64
+            runner: ubuntu-24.04-arm
+            threads: "yes"
+          - id: macos-arm64
+            platform: macos
+            arch: arm64
+            arch_label: arm64
+            runner: macos-14
+            threads: "yes"
+          - id: macos-x86_64
+            platform: macos
             arch: x86_64
-            godot_cpp_ref: "godot-4.5-stable"
-          - identifier: android-x86_64-release
-            name: 🤖 Android x86_64 Release
-            runner: ubuntu-24.04
-            target: template_release
-            dev_build: no
-            platform: android
-            arch: x86_64
-            godot_cpp_ref: "godot-4.5-stable"
-          - identifier: ios-arm64-all
-            name: 🍏 iOS (arm64) All
-            runner: macos-latest
+            arch_label: x86_64
+            runner: macos-14
+            threads: "yes"
+          - id: ios-arm64
             platform: ios
+            arch: arm64
+            arch_label: arm64
+            ios_simulator: "no"
+            runner: macos-14
+            threads: "yes"
+          - id: ios-arm64-simulator
+            platform: ios
+            arch: arm64
+            arch_label: arm64-simulator
+            ios_simulator: "yes"
+            runner: macos-14
+            threads: "yes"
+          - id: android-arm64
+            platform: android
+            arch: arm64
+            arch_label: arm64
+            runner: ubuntu-24.04
+            threads: "yes"
+          - id: android-x86_64
+            platform: android
+            arch: x86_64
+            arch_label: x86_64
+            runner: ubuntu-24.04
+            threads: "yes"
     steps:
-      - name: Set up Python
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python and SCons
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
 
-      - name: Set up SCons
-        shell: bash
-        run: |
-          python -c "import sys; print(sys.version)"
-          python -m pip install scons
-          scons --version
+      - name: Install SCons
+        run: python -m pip install scons
 
-      - name: Checkout project
-        uses: actions/checkout@v4
-        with:
-          submodules: false
-
-      - name: Get godot-cpp submodule commit
-        id: godot_cpp
-        shell: bash
-        run: echo "sha=$(git rev-parse HEAD:godot-cpp)" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout godot-cpp
+      - name: Check out godot-cpp
         uses: actions/checkout@v4
         with:
           repository: godotengine/godot-cpp
-          path: godot-cpp
+          ref: ${{ matrix.platform == 'android' && 'godot-4.5-stable' || 'godot-4.2-stable' }}
+          path: epic-online-services-godot/godot-cpp
           submodules: recursive
-          ref: ${{ matrix.godot_cpp_ref || steps.godot_cpp.outputs.sha }}
 
-      - name: Checkout private EOS SDK mirror repo
-        uses: actions/checkout@v4
-        with:
-          token: "${{secrets.EOS_SDK_MIRROR_PAT}}"
-          repository: 3ddelano/eos-sdk-mirror
-          path: thirdparty/eos-sdk
-          ref: "819cd0ffb3be1b28576bb9f23c502bec6c182d6b"
-
-      - name: (Windows) Install mingw64
-        if: ${{ matrix.platform == 'windows' }}
-        # change to egor-tensin/setup-mingw@v2 once pr #16 is merged
-        uses: 3ddelano/setup-mingw@patch-1
-
-      - name: (Linux) Install dependencies
-        if: ${{ matrix.platform == 'linux' }}
+      - name: Download EOS SDK release
+        working-directory: epic-online-services-godot
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.SDK_REPO_TOKEN }}
+          SDK_DOWNLOAD_DIR: ${{ runner.temp }}/eos-sdk-release
+          SDK_EXTRACTED_DIR: ${{ runner.temp }}/eos-sdk-extracted
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -qqq build-essential pkg-config
+          mkdir -p "$SDK_DOWNLOAD_DIR" "$SDK_EXTRACTED_DIR"
+          gh release download --repo amathew4538/eos-sdk-mirror --dir "$SDK_DOWNLOAD_DIR"
+          python - <<'PY'
+          import os
+          import shutil
+          import tarfile
+          import zipfile
+          from pathlib import Path
 
-      - name: (Android) Install dependencies
-        if: ${{ matrix.platform == 'android' }}
+          downloads = Path(os.environ["SDK_DOWNLOAD_DIR"])
+          extracted = Path(os.environ["SDK_EXTRACTED_DIR"])
+          destination = Path("thirdparty/eos-sdk/SDK")
+          archives = sorted(path for path in downloads.iterdir() if path.is_file())
+          if not archives:
+              raise SystemExit("The latest EOS SDK release has no downloadable assets.")
+
+          candidates = []
+          for archive in archives:
+              target = extracted / archive.stem
+              target.mkdir(parents=True, exist_ok=True)
+              if zipfile.is_zipfile(archive):
+                  with zipfile.ZipFile(archive) as source:
+                      source.extractall(target)
+              elif tarfile.is_tarfile(archive):
+                  with tarfile.open(archive) as source:
+                      source.extractall(target)
+              else:
+                  continue
+              candidates.extend(
+                  folder.parent for folder in target.rglob("Include")
+                  if folder.is_dir() and (folder.parent / "Lib").is_dir()
+              )
+
+          if not candidates:
+              raise SystemExit("No extracted EOS SDK folder containing Include/ and Lib/ was found.")
+          shutil.rmtree(destination, ignore_errors=True)
+          destination.mkdir(parents=True)
+          for candidate in candidates:
+              shutil.copytree(candidate, destination, dirs_exist_ok=True)
+          print(f"Installed EOS SDK from {len(candidates)} release asset(s)")
+          PY
+
+      - name: Set up MSVC
+        if: matrix.platform == 'windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.arch == 'arm64' && 'arm64' || 'amd64' }}
+
+      - name: Set up Android NDK
+        if: matrix.platform == 'android'
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r28b
           link-to-sdk: true
 
-      - name: Setup build cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/.scons-cache/
-          key: ${{ matrix.identifier }}
-          restore-keys: |
-            ${{ matrix.identifier }}
-        continue-on-error: true
-
-      - name: Compile extension
-        shell: sh
-        if: ${{ matrix.platform != 'ios' }}
+      - name: Build static library
+        working-directory: epic-online-services-godot
+        shell: bash
         env:
           SCONS_CACHE: ${{ github.workspace }}/.scons-cache/
           SCONS_CACHE_LIMIT: 7168
         run: |
-          scons target='${{ matrix.target }}' platform='${{ matrix.platform }}' arch='${{ matrix.arch }}' dev_build='${{ matrix.dev_build }}'
+          scons \
+            target=template_release \
+            platform='${{ matrix.platform }}' \
+            arch='${{ matrix.arch }}' \
+            threads='${{ matrix.threads }}' \
+            dev_build=no \
+            static_library=yes \
+            ${{ matrix.platform == 'ios' && format('ios_simulator={0}', matrix.ios_simulator) || '' }}
 
-      - name: (iOS) Compile extension
-        shell: sh
-        if: ${{ matrix.platform == 'ios' }}
+      - name: Collect module and SDK files
+        working-directory: epic-online-services-godot
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          import shutil
+          from pathlib import Path
+
+          platform = os.environ["PLATFORM"]
+          arch = os.environ["ARCH"]
+          arch_label = os.environ["ARCH_LABEL"]
+          payload = Path("payload")
+          addon_output = Path("sample/addons/epic-online-services-godot/bin")
+          godot_cpp_output = Path("godot-cpp/bin")
+          sdk_root = Path("thirdparty/eos-sdk/SDK")
+
+          def copy_file(source, destination):
+              destination.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(source, destination)
+
+          addon_files = [
+              path for path in addon_output.rglob("*")
+              if path.is_file() and (
+                  path.suffix.lower() in {".a", ".lib"}
+                  or any(parent.suffix == ".framework" for parent in path.parents)
+                  and not path.suffix
+              )
+              and path.name.startswith("libeosg.")
+          ]
+          if not addon_files:
+              raise SystemExit(f"No static EOSG library was produced for {platform}/{arch_label}.")
+          for source in addon_files:
+              copy_file(source, payload / "bin/addons/eosg/bin" / source.relative_to(addon_output))
+
+          godot_cpp_files = [
+              path for path in godot_cpp_output.glob("libgodot-cpp.*")
+              if path.is_file() and path.suffix.lower() in {".a", ".lib"}
+              and f".{platform}.template_release." in path.name
+              and f".{arch}" in path.name
+          ]
+          if platform == "ios":
+              simulator = arch_label.endswith("-simulator")
+              godot_cpp_files = [
+                  path for path in godot_cpp_files
+                  if (".simulator." in path.name) == simulator
+              ]
+          if not godot_cpp_files:
+              raise SystemExit(f"No matching godot-cpp static library was produced for {platform}/{arch_label}.")
+          for source in godot_cpp_files:
+              copy_file(source, payload / "ext/godot-cpp/bin" / source.name)
+
+          sdk_destination = payload / "sdk" / platform / arch_label
+          include_dir = sdk_root / "Include"
+          if include_dir.is_dir():
+              shutil.copytree(include_dir, sdk_destination / "Include", dirs_exist_ok=True)
+
+          if platform == "ios":
+              ios_sdk = sdk_root / "Bin/IOS/EOSSDK.xcframework"
+              if not ios_sdk.is_dir():
+                  raise SystemExit(f"EOSSDK.xcframework is missing for {platform}/{arch_label}.")
+              shutil.copytree(ios_sdk, sdk_destination / "EOSSDK.xcframework", dirs_exist_ok=True)
+          elif platform == "android":
+              android_sdk = sdk_root / "Bin/Android/static-stdc++"
+              if not android_sdk.is_dir():
+                  raise SystemExit(f"Android EOS SDK is missing for {platform}/{arch_label}.")
+              shutil.copytree(android_sdk, sdk_destination / "Android", dirs_exist_ok=True)
+          else:
+              sdk_extensions = {".a", ".lib", ".so", ".dylib", ".dll", ".aar"}
+              sdk_libraries = []
+
+              def matches_target(path):
+                  text = str(path).lower().replace("\\", "/")
+                  names = {
+                      "windows": ("windows", "win64", "win32", "x64", "arm64"),
+                      "linux": ("linux",),
+                      "macos": ("mac", "macos"),
+                  }[platform]
+                  if not any(token in text for token in names):
+                      return False
+
+                  explicit_x64 = any(token in text for token in ("x86_64", "x64", "win64"))
+                  explicit_arm64 = "arm64" in text or "aarch64" in text
+                  if arch == "arm64" and explicit_x64 and not explicit_arm64:
+                      return False
+                  if arch == "x86_64" and explicit_arm64:
+                      return False
+                  return True
+
+              for source in sdk_root.rglob("*"):
+                  if source.is_file() and source.suffix.lower() in sdk_extensions and matches_target(source):
+                      copy_file(source, sdk_destination / source.relative_to(sdk_root))
+                      copy_file(source, sdk_destination / "lib" / source.name)
+                      sdk_libraries.append(source)
+              if not sdk_libraries:
+                  raise SystemExit(f"No matching EOS SDK libraries found for {platform}/{arch_label}.")
+          PY
         env:
-          SCONS_CACHE: ${{ github.workspace }}/.scons-cache/
-          SCONS_CACHE_LIMIT: 7168
-        run: |
-          chmod +x ./build-ios.sh && ./build-ios.sh
+          PLATFORM: ${{ matrix.platform }}
+          ARCH: ${{ matrix.arch }}
+          ARCH_LABEL: ${{ matrix.arch_label }}
+          THREADS: ${{ matrix.threads }}
 
-      - name: Copy extra files to addon folder
-        shell: sh
-        run: |
-          cp -n '${{ github.workspace }}/README.md' '${{ github.workspace }}/LICENSE.md' '${{ github.workspace }}/sample/addons/epic-online-services-godot/'
-
-      - name: Create artifact folder
-        shell: sh
-        run: |
-          mkdir -p '${{ github.workspace }}/artifact-${{ matrix.identifier }}/${{ github.event.repository.name }}/'
-
-      - name: Copy addons folder to artifact folder
-        shell: sh
-        run: |
-          cp -n -r '${{ github.workspace }}/sample/addons' '${{ github.workspace }}/artifact-${{ matrix.identifier }}/${{ github.event.repository.name }}/'
-
-      - name: (Windows) Delete compilation files
-        if: ${{ matrix.platform == 'windows' }}
-        shell: pwsh
-        run: |
-          Remove-Item ${{ github.workspace }}/artifact-${{ matrix.identifier }}/${{ github.event.repository.name }}/addons/epic-online-services-godot/bin/windows/* -Include *.exp,*.lib,*.ilk -Force
-
-      - name: Upload artifact
+      - name: Upload platform artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.event.repository.name }}-${{ matrix.identifier }}-${{ github.sha }}
-          path: |
-            ${{ github.workspace }}/artifact-${{ matrix.identifier }}/
+          name: static-module-${{ matrix.id }}
+          path: epic-online-services-godot/payload/
+          if-no-files-found: error
           compression-level: 9
           retention-days: 14
 
-  # Code signs our own Windows DLLs (debug + release) in a single SignPath signing
-  # request, then replaces them in the Windows build artifacts. Third-party DLLs
-  # (EOSSDK, xaudio2) are already vendor-signed. Skipped when the API token is
-  # unavailable (e.g. pull requests from forks).
-  sign-windows:
-    runs-on: windows-latest
-    name: 🔏 Sign Windows
+  package-module:
+    name: Package static module
+    runs-on: ubuntu-24.04
     needs: build
-    env:
-      ARTIFACT_PREFIX: ${{ github.event.repository.name }}-windows
-    steps:
-      - name: Download Windows build artifacts
-        if: ${{ env.SIGNPATH_ENABLED == 'true' }}
-        uses: actions/download-artifact@v4
-        with:
-          pattern: ${{ env.ARTIFACT_PREFIX }}-*-${{ github.sha }}
-          path: windows-artifacts
-
-      - name: Collect unsigned DLLs
-        id: collect
-        if: ${{ env.SIGNPATH_ENABLED == 'true' }}
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $dlls = @(Get-ChildItem windows-artifacts -Recurse -Filter 'libeosg.windows.*.dll')
-          if ($dlls.Count -ne 2) { throw "Expected 2 DLLs (debug + release), found $($dlls.Count)" }
-          New-Item -ItemType Directory unsigned-dlls | Out-Null
-          Copy-Item $dlls.FullName unsigned-dlls/
-          $pluginCfg = @(Get-ChildItem windows-artifacts -Recurse -Filter 'plugin.cfg')[0]
-          $version = (Select-String -Path $pluginCfg.FullName -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
-          if (-not $version) { throw "Could not read version from $($pluginCfg.FullName)" }
-          "version=$version" >> $env:GITHUB_OUTPUT
-
-      - name: Upload unsigned DLLs
-        id: upload-unsigned
-        if: ${{ env.SIGNPATH_ENABLED == 'true' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: unsigned-windows-dlls-${{ github.sha }}
-          path: unsigned-dlls/
-          if-no-files-found: error
-          retention-days: 1
-
-      - name: Sign DLLs with SignPath
-        id: signpath
-        if: ${{ env.SIGNPATH_ENABLED == 'true' }}
-        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ env.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ env.SIGNPATH_PROJECT_SLUG }}
-          signing-policy-slug: ${{ env.SIGNPATH_SIGNING_POLICY_SLUG }}
-          artifact-configuration-slug: ${{ env.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
-          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
-          parameters: |
-            version: ${{ toJSON(steps.collect.outputs.version) }}
-          wait-for-completion: true
-          wait-for-completion-timeout-in-seconds: ${{ env.SIGNPATH_WAIT_TIMEOUT_SECONDS }}
-          output-artifact-directory: signed-dlls
-
-      - name: Replace DLLs with signed DLLs
-        if: ${{ env.SIGNPATH_ENABLED == 'true' }}
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          "Signing policy: ``$env:SIGNPATH_SIGNING_POLICY_SLUG``, [signing request](${{ steps.signpath.outputs.signing-request-web-url }})" >> $env:GITHUB_STEP_SUMMARY
-          foreach ($dll in Get-ChildItem windows-artifacts -Recurse -Filter 'libeosg.windows.*.dll') {
-            $signed = Join-Path signed-dlls $dll.Name
-            if (-not (Test-Path $signed)) { throw "Missing signed $($dll.Name)" }
-            $sig = Get-AuthenticodeSignature $signed
-            if ($null -eq $sig.SignerCertificate) { throw "$($dll.Name) has no Authenticode signature" }
-            Write-Host "$($dll.Name): $($sig.SignerCertificate.Subject) [$($sig.Status)] $($sig.SignerCertificate.Thumbprint)"
-            "- ``$($dll.Name)``: ``$($sig.SignerCertificate.Subject)`` (status: $($sig.Status))" >> $env:GITHUB_STEP_SUMMARY
-            Copy-Item $signed $dll.FullName -Force
-          }
-
-      - name: Re-upload signed Windows Debug artifact
-        if: ${{ env.SIGNPATH_ENABLED == 'true' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.ARTIFACT_PREFIX }}-debug-${{ github.sha }}
-          path: windows-artifacts/${{ env.ARTIFACT_PREFIX }}-debug-${{ github.sha }}/
-          if-no-files-found: error
-          overwrite: true
-          compression-level: 9
-          retention-days: 14
-
-      - name: Re-upload signed Windows Release artifact
-        if: ${{ env.SIGNPATH_ENABLED == 'true' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.ARTIFACT_PREFIX }}-release-${{ github.sha }}
-          path: windows-artifacts/${{ env.ARTIFACT_PREFIX }}-release-${{ github.sha }}/
-          if-no-files-found: error
-          overwrite: true
-          compression-level: 9
-          retention-days: 14
-
-  merge-platforms:
-    runs-on: ubuntu-latest
-    needs: [build, sign-windows]
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - identifier: linux-x86_64
-            name: 🐧 Linux
-            matchpattern: linux
-          - identifier: macos-universal
-            name: 🍎 macOS (universal)
-            matchpattern: macos
-          - identifier: windows
-            name: 🏁 Windows
-            matchpattern: windows
-          - identifier: android
-            name: 🤖 Android
-            matchpattern: android
-          - identifier: ios
-            name: 🍏 iOS
-            matchpattern: ios
-
-    steps:
-      - name: Merge artifacts for platform
-        uses: actions/upload-artifact/merge@v4
-        with:
-          name: ${{ github.event.repository.name }}-${{ matrix.matchpattern }}-${{ github.sha }}
-          pattern: ${{ github.event.repository.name }}-${{ matrix.matchpattern }}*
-          compression-level: 9
-          retention-days: 14
-
-  merge-all:
-    runs-on: ubuntu-latest
-    needs: merge-platforms
-    steps:
-      - name: Merge artifacts into single
-        uses: actions/upload-artifact/merge@v4
-        with:
-          name: ${{ github.event.repository.name }}-all-${{ github.sha }}
-          pattern: ${{ github.event.repository.name }}-*
-          compression-level: 9
-          retention-days: 14
-
-  upload-to-release:
-    if: startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
-    needs: merge-all
     permissions:
       contents: write
     steps:
-      - name: Download 'all' artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ github.event.repository.name }}-all-${{ github.sha }}
-          path: artifact-all
-      - name: Download 'android' artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ github.event.repository.name }}-android-${{ github.sha }}
-          path: artifact-android
-      - name: Download 'macos' artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ github.event.repository.name }}-macos-${{ github.sha }}
-          path: artifact-macos
-      - name: Download 'linux' artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ github.event.repository.name }}-linux-${{ github.sha }}
-          path: artifact-linux
-      - name: Download 'windows' artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ github.event.repository.name }}-windows-${{ github.sha }}
-          path: artifact-windows
-      - name: Download 'ios' artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ github.event.repository.name }}-ios-${{ github.sha }}
-          path: artifact-ios
+      - name: Check out repository
+        uses: actions/checkout@v4
 
-      - name: Zip 'all' artifact
-        run: |
-          cd artifact-all
-          zip -9 -r ../${{ github.event.repository.name }}-all-${{ github.sha }}.zip .
-          cd ..
-      - name: Zip 'android' artifact
-        run: |
-          cd artifact-android
-          zip -9 -r ../${{ github.event.repository.name }}-android-${{ github.sha }}.zip .
-          cd ..
-      - name: Zip 'macos' artifact
-        run: |
-          cd artifact-macos
-          zip -9 -r ../${{ github.event.repository.name }}-macos-${{ github.sha }}.zip .
-          cd ..
-      - name: Zip 'linux' artifact
-        run: |
-          cd artifact-linux
-          zip -9 -r ../${{ github.event.repository.name }}-linux-${{ github.sha }}.zip .
-          cd ..
-      - name: Zip 'windows' artifact
-        run: |
-          cd artifact-windows
-          zip -9 -r ../${{ github.event.repository.name }}-windows-${{ github.sha }}.zip .
-          cd ..
-      - name: Zip 'ios' artifact
-        run: |
-          cd artifact-ios
-          zip -9 -r ../${{ github.event.repository.name }}-ios-${{ github.sha }}.zip .
-          cd ..
+      - name: Download platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: static-module-*
+          path: platform-artifacts
 
-      - name: Create draft release and upload assets
-        uses: softprops/action-gh-release@v2
+      - name: Assemble module and create zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p packaged/eosg
+          cp -a eosg/. packaged/eosg/
+          for artifact in platform-artifacts/*; do
+            cp -a "$artifact/." packaged/eosg/
+          done
+          cd packaged
+          zip -9 -r ../eosg-static-module.zip eosg
+
+      - name: Upload complete module artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: eosg-static-module
+          path: eosg-static-module.zip
+          if-no-files-found: error
+          compression-level: 9
+          retention-days: 14
+
+      - name: Create release
         if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          draft: true
-          files: |
-            ${{github.event.repository.name}}-all-${{ github.sha }}.zip
-            ${{github.event.repository.name}}-android-${{ github.sha }}.zip
-            ${{github.event.repository.name}}-macos-${{ github.sha }}.zip
-            ${{github.event.repository.name}}-linux-${{ github.sha }}.zip
-            ${{github.event.repository.name}}-windows-${{ github.sha }}.zip
-            ${{github.event.repository.name}}-ios-${{ github.sha }}.zip
+          draft: false
+          files: eosg-static-module.zip

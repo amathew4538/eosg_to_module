@@ -23,10 +23,10 @@ def get_sufix():
 # Libraries
 if env["platform"] == "macos" or env["platform"] == "ios":
     base_path = "#modules/eosg/bin/addons/eosg/bin/libeosg{}.framework".format(get_sufix())
-    base_file = "libgodot_riscv{}".format(get_sufix())
+    base_file = "libeosg{}".format(get_sufix())
 else:
     base_path = "#modules/eosg/bin/addons/eosg/bin"
-    base_file = "libgodot_riscv{}".format(get_sufix())
+    base_file = "libeosg{}".format(get_sufix())
 
 env.Append(LIBS=[base_file])
 env.Append(LIBPATH=[base_path])
@@ -37,6 +37,36 @@ base_file = "libgodot-cpp{}".format(get_sufix())
 
 env.Append(LIBS=[base_file])
 env.Append(LIBPATH=[base_path])
+
+# EOS SDK
+platform = env["platform"].replace("linuxbsd", "linux")
+sdk_arch = env["arch"]
+if platform == "ios" and env["ios_simulator"]:
+    sdk_arch += "-simulator"
+elif platform == "web" and not env["threads"]:
+    sdk_arch += "-nothreads"
+
+sdk_path = "#modules/eosg/sdk/{}/{}".format(platform, sdk_arch)
+env.Append(CPPPATH=[sdk_path + "/Include"])
+if platform in ["windows", "linux", "macos"]:
+    env.Append(LIBPATH=[sdk_path + "/lib"])
+    if platform == "windows":
+        env.Append(LIBS=["EOSSDK-Win64-Shipping"])
+    elif platform == "linux":
+        env.Append(LIBS=["EOSSDK-LinuxArm64-Shipping" if env["arch"] == "arm64" else "EOSSDK-Linux-Shipping"])
+    else:
+        env.Append(LIBS=["EOSSDK-Mac-Shipping"])
+elif platform == "ios":
+    ios_slice = "ios-arm64-simulator" if env["ios_simulator"] else "ios-arm64"
+    env.Append(LINKFLAGS=[
+        "-F", sdk_path + "/EOSSDK.xcframework/" + ios_slice,
+        "-framework", "AuthenticationServices",
+        "-framework", "EOSSDK",
+    ])
+elif platform == "android":
+    android_arch = "arm64-v8a" if env["arch"] == "arm64" else "x86_64"
+    env.Append(LIBPATH=[sdk_path + "/Android/libs/" + android_arch])
+    env.Append(LIBS=["EOSSDK"])
 
 # Sources
 env_gdextension = env_modules.Clone()
