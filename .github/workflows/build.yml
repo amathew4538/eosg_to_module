@@ -213,7 +213,7 @@ jobs:
                   path.suffix.lower() in {".a", ".lib"}
                   or platform in {"macos", "ios"}
                   and any(parent.suffix == ".framework" for parent in path.parents)
-                  and not path.suffix
+                  and path.name == path.parent.name.removesuffix(".framework")
               )
           ]
           if not addon_files:
