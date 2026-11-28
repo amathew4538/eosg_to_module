@@ -2,6 +2,12 @@ name: Build static EOSG module
 
 on:
   workflow_dispatch:
+    inputs:
+      full_matrix:
+        description: Build every platform and architecture (release tags always do this)
+        required: false
+        type: boolean
+        default: false
   push:
     branches:
       - "*"
@@ -13,76 +19,59 @@ permissions:
   contents: read
 
 jobs:
+  select-build-matrix:
+    name: Select build targets
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      - name: Choose target matrix
+        id: select
+        env:
+          FULL_MATRIX: ${{ startsWith(github.ref, 'refs/tags/') || inputs.full_matrix }}
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+
+          platforms = [
+              ("windows-x86_64", "windows", "x86_64", "windows-latest", "4.2"),
+              ("windows-arm64", "windows", "arm64", "windows-latest", "4.2"),
+              ("linux-x86_64", "linux", "x86_64", "ubuntu-24.04", "4.2"),
+              ("linux-arm64", "linux", "arm64", "ubuntu-24.04-arm", "4.2"),
+              ("macos-arm64", "macos", "arm64", "macos-15", "4.2"),
+              ("macos-x86_64", "macos", "x86_64", "macos-15-intel", "4.2"),
+              ("ios-arm64", "ios", "arm64", "macos-15", "4.2"),
+              ("android-arm64", "android", "arm64", "ubuntu-24.04", "godot-4.5-stable"),
+              ("android-x86_64", "android", "x86_64", "ubuntu-24.04", "godot-4.5-stable"),
+          ]
+          if os.environ["FULL_MATRIX"].lower() != "true":
+              platforms = [item for item in platforms if item[0] == "macos-arm64"]
+
+          targets = ("editor", "template_release", "template_debug")
+          include = [
+              {
+                  "id": f"{platform_id}-{target}",
+                  "platform": platform,
+                  "arch": arch,
+                  "runner": runner,
+                  "godot_cpp_ref": godot_cpp_ref,
+                  "target": target,
+              }
+              for platform_id, platform, arch, runner, godot_cpp_ref in platforms
+              for target in targets
+          ]
+          print("matrix=" + json.dumps({"include": include}, separators=(",", ":")))
+          PY
+
   build:
-    name: ${{ matrix.platform }} / ${{ matrix.arch_label }}
+    needs: select-build-matrix
+    name: ${{ matrix.platform }} / ${{ matrix.arch }} / ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - id: windows-x86_64
-            platform: windows
-            arch: x86_64
-            arch_label: x86_64
-            runner: windows-latest
-            godot_cpp_ref: "4.2"
-            threads: "yes"
-          - id: windows-arm64
-            platform: windows
-            arch: arm64
-            arch_label: arm64
-            runner: windows-latest
-            godot_cpp_ref: "4.2"
-            threads: "yes"
-          - id: linux-x86_64
-            platform: linux
-            arch: x86_64
-            arch_label: x86_64
-            runner: ubuntu-24.04
-            godot_cpp_ref: "4.2"
-            threads: "yes"
-          - id: linux-arm64
-            platform: linux
-            arch: arm64
-            arch_label: arm64
-            runner: ubuntu-24.04-arm
-            godot_cpp_ref: "4.2"
-            threads: "yes"
-          - id: macos-arm64
-            platform: macos
-            arch: arm64
-            arch_label: arm64
-            runner: macos-15
-            godot_cpp_ref: "4.2"
-            threads: "yes"
-          - id: macos-x86_64
-            platform: macos
-            arch: x86_64
-            arch_label: x86_64
-            runner: macos-15-intel
-            godot_cpp_ref: "4.2"
-            threads: "yes"
-          - id: ios-arm64
-            platform: ios
-            arch: arm64
-            arch_label: arm64
-            runner: macos-15
-            godot_cpp_ref: "4.2"
-            threads: "yes"
-          - id: android-arm64
-            platform: android
-            arch: arm64
-            arch_label: arm64
-            runner: ubuntu-24.04
-            godot_cpp_ref: "godot-4.5-stable"
-            threads: "yes"
-          - id: android-x86_64
-            platform: android
-            arch: x86_64
-            arch_label: x86_64
-            runner: ubuntu-24.04
-            godot_cpp_ref: "godot-4.5-stable"
-            threads: "yes"
+      matrix: ${{ fromJSON(needs.select-build-matrix.outputs.matrix) }}
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -121,7 +110,6 @@ jobs:
           python - <<'PY'
           import os
           import shutil
-          import tarfile
           import zipfile
           from pathlib import Path
 
@@ -130,20 +118,16 @@ jobs:
           destination = Path("thirdparty/eos-sdk/SDK")
           archives = sorted(path for path in downloads.iterdir() if path.is_file())
           if not archives:
-              raise SystemExit("The latest EOS SDK release has no downloadable assets.")
+              raise SystemExit("The SDK release has no downloaded assets.")
 
           sdk_roots = []
           for archive in archives:
               target = extracted / archive.stem
               target.mkdir(parents=True, exist_ok=True)
-              if zipfile.is_zipfile(archive):
-                  with zipfile.ZipFile(archive) as source:
-                      source.extractall(target)
-              elif tarfile.is_tarfile(archive):
-                  with tarfile.open(archive) as source:
-                      source.extractall(target)
-              else:
+              if not zipfile.is_zipfile(archive):
                   continue
+              with zipfile.ZipFile(archive) as source:
+                  source.extractall(target)
               sdk_roots.extend(
                   folder for folder in target.rglob("SDK")
                   if "__MACOSX" not in folder.parts
@@ -166,7 +150,7 @@ jobs:
           )
           missing = [str(path) for path in required_paths if not path.exists()]
           if missing:
-              raise SystemExit("Downloaded SDK assets are missing required paths: " + ", ".join(missing))
+              raise SystemExit("Downloaded SDK assets are missing: " + ", ".join(missing))
           print(f"Installed SDK content from {len(sdk_roots)} release archive(s)")
           PY
 
@@ -189,12 +173,13 @@ jobs:
         env:
           SCONS_CACHE: ${{ github.workspace }}/.scons-cache/
           SCONS_CACHE_LIMIT: 7168
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.platform == 'macos' && '13.0' || '' }}
         run: |
           scons \
-            target=template_release \
+            target='${{ matrix.target }}' \
             platform='${{ matrix.platform }}' \
             arch='${{ matrix.arch }}' \
-            threads='${{ matrix.threads }}' \
+            threads=yes \
             dev_build=no
 
       - name: Collect module and SDK files
@@ -208,7 +193,8 @@ jobs:
 
           platform = os.environ["PLATFORM"]
           arch = os.environ["ARCH"]
-          arch_label = os.environ["ARCH_LABEL"]
+          target = os.environ["TARGET"]
+          artifact_id = os.environ["ARTIFACT_ID"]
           payload = Path("payload")
           addon_output = Path("sample/addons/epic-online-services-godot/bin")
           godot_cpp_output = Path("godot-cpp/bin")
@@ -220,30 +206,34 @@ jobs:
 
           addon_files = [
               path for path in addon_output.rglob("*")
-              if path.is_file() and (
+              if path.is_file()
+              and path.name.startswith("libeosg.")
+              and f".{platform}.{target}." in path.name
+              and (
                   path.suffix.lower() in {".a", ".lib"}
-                  or any(parent.suffix == ".framework" for parent in path.parents)
+                  or platform in {"macos", "ios"}
+                  and any(parent.suffix == ".framework" for parent in path.parents)
                   and not path.suffix
               )
-              and path.name.startswith("libeosg.")
           ]
           if not addon_files:
-              raise SystemExit(f"No static EOSG library was produced for {platform}/{arch_label}.")
+              raise SystemExit(f"No static EOSG archive was produced for {artifact_id}.")
           for source in addon_files:
               copy_file(source, payload / "bin/addons/eosg/bin" / source.relative_to(addon_output))
 
           godot_cpp_files = [
               path for path in godot_cpp_output.glob("libgodot-cpp.*")
-              if path.is_file() and path.suffix.lower() in {".a", ".lib"}
-              and f".{platform}.template_release." in path.name
+              if path.is_file()
+              and path.suffix.lower() in {".a", ".lib"}
+              and f".{platform}.{target}." in path.name
               and f".{arch}" in path.name
           ]
           if not godot_cpp_files:
-              raise SystemExit(f"No matching godot-cpp static library was produced for {platform}/{arch_label}.")
+              raise SystemExit(f"No matching godot-cpp archive was produced for {artifact_id}.")
           for source in godot_cpp_files:
               copy_file(source, payload / "ext/godot-cpp/bin" / source.name)
 
-          sdk_destination = payload / "sdk" / platform / arch_label
+          sdk_destination = payload / "sdk" / platform / arch
           include_dir = sdk_root / "Include"
           if include_dir.is_dir():
               shutil.copytree(include_dir, sdk_destination / "Include", dirs_exist_ok=True)
@@ -251,12 +241,12 @@ jobs:
           if platform == "ios":
               ios_sdk = sdk_root / "Bin/IOS/EOSSDK.xcframework"
               if not ios_sdk.is_dir():
-                  raise SystemExit(f"EOSSDK.xcframework is missing for {platform}/{arch_label}.")
+                  raise SystemExit(f"EOSSDK.xcframework is missing for {artifact_id}.")
               shutil.copytree(ios_sdk, sdk_destination / "EOSSDK.xcframework", dirs_exist_ok=True)
           elif platform == "android":
               android_sdk = sdk_root / "Bin/Android/static-stdc++"
               if not android_sdk.is_dir():
-                  raise SystemExit(f"Android EOS SDK is missing for {platform}/{arch_label}.")
+                  raise SystemExit(f"Android EOS SDK is missing for {artifact_id}.")
               shutil.copytree(android_sdk, sdk_destination / "Android", dirs_exist_ok=True)
           else:
               sdk_extensions = {".a", ".lib", ".so", ".dylib", ".dll", ".aar"}
@@ -271,7 +261,6 @@ jobs:
                   }[platform]
                   if not any(token in text for token in names):
                       return False
-
                   explicit_x64 = any(token in text for token in ("x86_64", "x64", "win64"))
                   explicit_arm64 = "arm64" in text or "aarch64" in text
                   if arch == "arm64" and explicit_x64 and not explicit_arm64:
@@ -286,13 +275,13 @@ jobs:
                       copy_file(source, sdk_destination / "lib" / source.name)
                       sdk_libraries.append(source)
               if not sdk_libraries:
-                  raise SystemExit(f"No matching EOS SDK libraries found for {platform}/{arch_label}.")
+                  raise SystemExit(f"No matching EOS SDK libraries found for {artifact_id}.")
           PY
         env:
           PLATFORM: ${{ matrix.platform }}
           ARCH: ${{ matrix.arch }}
-          ARCH_LABEL: ${{ matrix.arch_label }}
-          THREADS: ${{ matrix.threads }}
+          TARGET: ${{ matrix.target }}
+          ARTIFACT_ID: ${{ matrix.id }}
 
       - name: Upload platform artifact
         uses: actions/upload-artifact@v4
@@ -307,6 +296,7 @@ jobs:
     name: Package static module
     runs-on: ubuntu-24.04
     needs: build
+    if: always() && needs.build.result == 'success'
     permissions:
       contents: write
     steps:
