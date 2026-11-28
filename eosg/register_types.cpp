@@ -14,7 +14,7 @@ extern "C" {
     );
 }
 
-void initialize_sandbox_module(ModuleInitializationLevel p_level) {
+void initialize_eosg_module(ModuleInitializationLevel p_level) {
 	if (p_level != MODULE_INITIALIZATION_LEVEL_SERVERS) {
 		return;
 	}
@@ -28,5 +28,5 @@ void initialize_sandbox_module(ModuleInitializationLevel p_level) {
 	GDExtensionManager::get_singleton()->load_extension_with_loader("eosg", loader);
 }
 
-void uninitialize_sandbox_module(ModuleInitializationLevel p_level) {
+void uninitialize_eosg_module(ModuleInitializationLevel p_level) {
 }
